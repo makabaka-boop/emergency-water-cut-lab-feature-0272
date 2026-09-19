@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { analyze } from '../src/core/analyze'
+import { analyze, solve } from '../src/core/analyze'
+import { FlowEdge, maxFlow } from '../src/core/maxflow'
 import { Network } from '../src/core/types'
 import { validateNetwork } from '../src/core/validate'
 import { mulberry32 } from './helpers'
@@ -161,6 +162,66 @@ describe('安全整数上界', () => {
     const parsed = validateNetwork(net)
     expect(parsed.ok).toBe(false)
     if (!parsed.ok) expect(parsed.error.code).toBe('INVALID_NETWORK')
+  })
+})
+
+describe('按输入边身份的正/反残量容量', () => {
+  it('flow（反残量）+ residual（正残量）恒等于输入容量，重边/自环/零容量各自独立', () => {
+    // 直接在 maxFlow 层构造含重边、自环、原生反向边与零容量的输入边集合。
+    const edges: FlowEdge[] = [
+      { from: 0, to: 1, capacity: 4 }, // 重边 1
+      { from: 0, to: 1, capacity: 6 }, // 重边 2
+      { from: 0, to: 0, capacity: 9 }, // 自环：流量恒 0
+      { from: 1, to: 0, capacity: 7 }, // 原生反向边
+      { from: 1, to: 2, capacity: 0 }, // 零容量：流量恒 0
+      { from: 1, to: 2, capacity: 10 },
+    ]
+    const res = maxFlow(3, edges, 0, 2)
+    expect(res.value).toBe(10)
+    expect(res.flow).toHaveLength(edges.length)
+    expect(res.residual).toHaveLength(edges.length)
+    edges.forEach((e, i) => {
+      // 按输入边身份一一对应，不合并重边。
+      expect(res.flow[i] + res.residual[i]).toBe(e.capacity)
+      expect(res.flow[i]).toBeGreaterThanOrEqual(0)
+      expect(res.residual[i]).toBeGreaterThanOrEqual(0)
+    })
+    // 自环与零容量边无流量；原生反向边也不参与正向输送。
+    expect(res.flow[2]).toBe(0)
+    expect(res.residual[2]).toBe(9)
+    expect(res.flow[3]).toBe(0)
+    expect(res.flow[4]).toBe(0)
+    expect(res.residual[4]).toBe(0)
+    // 两条重边流量之和恰为送出的 10。
+    expect(res.flow[0] + res.flow[1]).toBe(10)
+    expect(res.flow[5]).toBe(10)
+    expect(res.residual[5]).toBe(0)
+  })
+
+  it('solve 给出的需求边残量与区间口径自洽', () => {
+    const net: Network = {
+      nodes: [{ id: 's' }, { id: 'm' }, { id: 't1' }, { id: 't2' }],
+      arcs: [
+        { id: 'b', from: 's', to: 'm', capacity: 5 },
+        { id: 'd1', from: 'm', to: 't1', capacity: 5 },
+        { id: 'd2', from: 'm', to: 't2', capacity: 5 },
+      ],
+      sources: [{ node: 's', capacity: 100 }],
+      sinks: [
+        { node: 't1', capacity: 5 },
+        { node: 't2', capacity: 5 },
+      ],
+    }
+    const solved = solve(net, new Set())
+    expect(solved.analysis.value).toBe(5)
+    // 两条需求边按身份独立：流量之和为总值，正残量之和为剩余需求容量。
+    const sumFlow = solved.sinkEdges.reduce((s, e) => s + e.flow, 0)
+    const sumResidual = solved.sinkEdges.reduce((s, e) => s + e.residual, 0)
+    expect(sumFlow).toBe(5)
+    expect(sumResidual).toBe(5)
+    solved.sinkEdges.forEach((e) => {
+      expect(e.flow + e.residual).toBe(e.capacity)
+    })
   })
 })
 

@@ -258,3 +258,43 @@ button:disabled {
   margin-top: 28px;
   font-size: 13px;
 }
+
+.range-box {
+  margin-top: 20px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 12px 16px 14px;
+  background: #fafbfc;
+}
+
+.range-box h3 {
+  margin-top: 2px;
+}
+
+.range-controls {
+  margin: 6px 0 8px;
+}
+
+.range-controls select {
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  margin-left: 6px;
+  min-width: 260px;
+}
+
+.range-note {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.error-inline {
+  margin: 8px 0 0;
+  border: 1px solid var(--danger);
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+}

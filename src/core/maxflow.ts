@@ -17,8 +17,16 @@ export interface FlowEdge {
 export interface MaxFlowResult {
   /** 最大流值（安全整数）。 */
   value: number
-  /** 每条输入边（按传入顺序）的流量。 */
+  /**
+   * 每条输入边（按传入顺序、即输入边身份）的反向残量容量；
+   * 反向弧初始为 0，故其值恰好等于该边当前分配到的流量。
+   */
   flow: Float64Array
+  /**
+   * 每条输入边（按传入顺序、即输入边身份）的正向残量容量 = 容量 - 流量。
+   * 与 flow 一一对应，二者之和恒等于该输入边容量。
+   */
+  residual: Float64Array
   /** 残量网络中从源可达的节点标记（含超级源/汇）。 */
   reachable: boolean[]
 }
@@ -128,10 +136,13 @@ export function maxFlow(
     value += blockingFlow()
   }
 
-  // 每条输入边的流量 = 其反向弧的残量（反向弧从 0 开始，随流量增加）。
+  // 每条输入边的正/反残量按输入边身份给出：
+  // 反向弧残量从 0 开始随流量增加，即该边流量；正向弧残量 = 容量 - 流量。
   const flow = new Float64Array(m)
+  const residual = new Float64Array(m)
   for (let i = 0; i < m; i++) {
     flow[i] = cap[2 * i + 1]
+    residual[i] = cap[2 * i]
   }
 
   // 在最终残量网络上从源做一次可达性遍历，得到最小割的源侧集合。
@@ -150,5 +161,5 @@ export function maxFlow(
     }
   }
 
-  return { value, flow, reachable }
+  return { value, flow, residual, reachable }
 }

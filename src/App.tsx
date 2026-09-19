@@ -1,7 +1,8 @@
 import { ChangeEvent, useMemo, useState } from 'react'
-import { analyze, relativeLoss } from './core/analyze'
+import { relativeLoss, solve, SolvedNetwork } from './core/analyze'
 import { formatInt, formatPercent } from './core/format'
 import { initialLoaderState, reduceLoad } from './core/loader'
+import { computeSupplyRange } from './core/range'
 import { SAMPLE_TEXT } from './core/sample'
 import { Analysis, CutItem, CutKind, Model } from './core/types'
 
@@ -112,12 +113,84 @@ function ValueBlock({
   )
 }
 
+/**
+ * 避难点供水区间：在当前最大供水总量不变的前提下，展示所选需求点
+ * 可获水量的最小值、当前 Dinic 方案值与最大值。
+ *
+ * 当前值只是一组可行分配；停用/恢复管段后由父组件传入按新断管集合
+ * 重算的 solved；求解失败时就地提示且不展示任何旧区间。
+ */
+function SupplyRangeSection({
+  solved,
+  selectedSink,
+  onSelectSink,
+}: {
+  solved: SolvedNetwork
+  selectedSink: string | null
+  onSelectSink: (id: string | null) => void
+}) {
+  const sinks = solved.network.sinks
+  const valid = selectedSink !== null && sinks.some((k) => k.node === selectedSink)
+  const result = useMemo(
+    () => (valid ? computeSupplyRange(solved, selectedSink!) : null),
+    [solved, selectedSink, valid],
+  )
+
+  return (
+    <div className="range-box">
+      <h3>避难点供水区间（当前最大供水总量 {formatInt(solved.analysis.value)} 不变）</h3>
+      <div className="range-controls">
+        <label>
+          选择需求点：
+          <select
+            value={valid ? selectedSink! : ''}
+            onChange={(e) => onSelectSink(e.target.value === '' ? null : e.target.value)}
+          >
+            <option value="">（不选择）</option>
+            {sinks.map((k) => (
+              <option key={k.node} value={k.node}>
+                {k.node}（需求容量 {formatInt(k.capacity)}）
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {!valid && (
+        <p className="muted">从当前模型的需求点中选择一个，查看其在总量不变前提下的可获水量区间。</p>
+      )}
+      {valid && result && !result.ok && (
+        <p className="error-inline" role="alert">
+          {result.error}（已清除旧区间，不影响上方已完成的核算结果）
+        </p>
+      )}
+      {valid && result && result.ok && (
+        <>
+          <div className="value-row">
+            <ValueBlock label="可获水量 · 最小值" value={formatInt(result.range.min)} />
+            <ValueBlock label="当前 Dinic 方案值" value={formatInt(result.range.current)} />
+            <ValueBlock label="可获水量 · 最大值" value={formatInt(result.range.max)} />
+          </div>
+          <p className="muted range-note">
+            当前值 {formatInt(result.range.current)} 只是保持总供水量{' '}
+            {formatInt(result.range.total)} 不变的一组可行分配；区间{' '}
+            <span className="mono">
+              [{formatInt(result.range.min)}, {formatInt(result.range.max)}]
+            </span>{' '}
+            内的每个整数端点均可在不突破容量与节点守恒的前提下实现。
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const [loader, setLoader] = useState(initialLoaderState)
   const [text, setText] = useState('')
   const [disabled, setDisabled] = useState<ReadonlySet<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [page, setPage] = useState(0)
+  const [selectedSink, setSelectedSink] = useState<string | null>(null)
 
   const model = loader.model
 
@@ -125,13 +198,15 @@ export default function App() {
     setLoader((prev) => reduceLoad(prev, t))
   }
 
-  // 模型更换（引用变化）时清空演练方案，从基线重新开始。
+  // 模型更换（引用变化）时清空演练方案与需求点选择，从基线重新开始。
+  // 载入新模型使旧的需求点选择失效（区间一并清除）。
   const [prevModel, setPrevModel] = useState(model)
   if (model !== prevModel) {
     setPrevModel(model)
     setDisabled(new Set())
     setFilter('')
     setPage(0)
+    setSelectedSink(null)
   }
 
   const onFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -142,12 +217,13 @@ export default function App() {
   }
 
   // 空方案直接复用基线结果，保证「清空方案」逐项精确回到基线。
-  const analysis: Analysis | null = useMemo(() => {
+  // 区间核算同样复用载入时保存的基线完整求解（baselineSolution）。
+  const baselineSolved = model?.baselineSolution ?? null
+  const drillSolved: SolvedNetwork | null = useMemo(() => {
     if (!model) return null
-    return disabled.size === 0
-      ? model.baseline
-      : analyze(model.network, disabled)
-  }, [model, disabled])
+    return disabled.size === 0 ? baselineSolved : solve(model.network, disabled)
+  }, [model, disabled, baselineSolved])
+  const analysis: Analysis | null = drillSolved ? drillSolved.analysis : null
 
   const filteredArcs = useMemo(() => {
     if (!model) return []
@@ -253,6 +329,11 @@ export default function App() {
             </div>
             <h3>残量网络源侧 → 汇侧割项</h3>
             <CutTable cut={model.baseline.cut} />
+            <SupplyRangeSection
+              solved={baselineSolved!}
+              selectedSink={selectedSink}
+              onSelectSink={setSelectedSink}
+            />
           </section>
 
           <section className="card">
@@ -309,6 +390,12 @@ export default function App() {
 
             <h3>当前割项</h3>
             <CutTable cut={analysis.cut} onDisableArc={toggleArc} />
+
+            <SupplyRangeSection
+              solved={drillSolved!}
+              selectedSink={selectedSink}
+              onSelectSink={setSelectedSink}
+            />
 
             <h3>管段清单（勾选停用）</h3>
             <div className="arc-toolbar">
