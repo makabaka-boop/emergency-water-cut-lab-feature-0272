@@ -56,6 +56,26 @@ export interface Model {
   baseline: Analysis
 }
 
+/**
+ * 避难点供水区间：在当前最大供水总量不变的前提下，指定需求边
+ * （某需求点 → 超级汇）在所有可行最大流分配中的可获水量范围。
+ *
+ * current 只是 Dinic 求出的「一组」可行分配，并非唯一答案；
+ * min / max 为严格保持当前 analysis.value 时该需求边流量的可达端点。
+ */
+export interface SinkInterval {
+  /** 需求点节点 id。 */
+  sinkNode: string
+  /** 当前 Dinic 方案中该需求边的流量（一组可行分配）。 */
+  current: number
+  /** 最小值（保持总值 = 当前 analysis.value，容量与节点守恒均成立时可达）。 */
+  min: number
+  /** 最大值（同上可达）。 */
+  max: number
+  /** 当前最大供水总量（= 区间所约束的总值，便于复核）。 */
+  total: number
+}
+
 export const INVALID_NETWORK = 'INVALID_NETWORK' as const
 
 export interface LoadError {

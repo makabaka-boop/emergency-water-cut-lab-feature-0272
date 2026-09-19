@@ -187,6 +187,47 @@ button:disabled {
   margin-left: 4px;
 }
 
+.interval-box {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-top: 8px;
+  background: #fafbfd;
+}
+
+.interval-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.interval-toolbar label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.interval-toolbar select {
+  font: inherit;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  min-width: 260px;
+}
+
+.interval-note {
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.interval-error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-size: 13px;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;

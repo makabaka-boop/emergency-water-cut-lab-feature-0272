@@ -1,5 +1,5 @@
 import { Analysis, CutItem, CutKind, Network } from './types'
-import { FlowEdge, maxFlow } from './maxflow'
+import { FlowEdge, maxFlow, MaxFlowResult } from './maxflow'
 
 const KIND_ORDER: Record<CutKind, number> = { source: 0, arc: 1, sink: 2 }
 
@@ -14,8 +14,39 @@ export function compareCutItems(a: CutItem, b: CutItem): number {
   )
 }
 
+/** 送入 Dinic 的建模边类别（与输入边身份一一对应，含零容量边）。 */
+export type PlanEdgeKind = 'arc' | 'source' | 'sink'
+
+export interface PlanEdge {
+  kind: PlanEdgeKind
+  /** 管段取管段 id；供水点/需求点取节点 id。 */
+  id: string
+  from: number
+  to: number
+  capacity: number
+}
+
 /**
- * 对给定断管方案做一次完整核算：
+ * 一次完整方案解：核算结果 + 建模边身份与其流量/残量。
+ * 最大流层按输入边身份提供该组解的正反残量容量（flow / residual），
+ * 供避难点供水区间的辅助网络独立核算使用。
+ */
+export interface PlanSolution {
+  analysis: Analysis
+  edges: PlanEdge[]
+  nodeCount: number
+  superSource: number
+  superSink: number
+  /** 与 edges 同序：当前方案分配到每条建模边的流量。 */
+  flow: Float64Array
+  /** 与 edges 同序：正向残量（capacity - flow）；反向残量即 flow。 */
+  residual: Float64Array
+  /** 需求点在 network.sinks 中的下标 → 建模边下标。 */
+  sinkEdgeIndex: number[]
+}
+
+/**
+ * 对给定断管方案建模并求一次最大流：
  *  1. 建模：超级源 → 各供水点（容量=供水能力），原管段（停用管段移除），
  *     各需求点 → 超级汇（容量=需求能力）；
  *  2. 求最大流，即当前最大供水量；
@@ -26,7 +57,10 @@ export function compareCutItems(a: CutItem, b: CutItem): number {
  * 同一输入必得同一输出（算法与排序均确定），因此清空方案后
  * 重算结果与基线逐项相等。
  */
-export function analyze(network: Network, disabled: ReadonlySet<string>): Analysis {
+export function solvePlan(
+  network: Network,
+  disabled: ReadonlySet<string>,
+): PlanSolution {
   const n = network.nodes.length
   const index = new Map<string, number>()
   network.nodes.forEach((node, i) => index.set(node.id, i))
@@ -34,7 +68,8 @@ export function analyze(network: Network, disabled: ReadonlySet<string>): Analys
   const SUPER_SOURCE = n
   const SUPER_SINK = n + 1
 
-  const edges: FlowEdge[] = []
+  const edges: PlanEdge[] = []
+  const rawEdges: FlowEdge[] = []
   const arcEdgeIndex: number[] = [] // 每条管段对应的边下标，停用为 -1
   network.arcs.forEach((arc) => {
     if (disabled.has(arc.id)) {
@@ -43,23 +78,43 @@ export function analyze(network: Network, disabled: ReadonlySet<string>): Analys
     }
     arcEdgeIndex.push(edges.length)
     edges.push({
+      kind: 'arc',
+      id: arc.id,
+      from: index.get(arc.from)!,
+      to: index.get(arc.to)!,
+      capacity: arc.capacity,
+    })
+    rawEdges.push({
       from: index.get(arc.from)!,
       to: index.get(arc.to)!,
       capacity: arc.capacity,
     })
   })
-  const sourceEdgeIndex: number[] = []
   network.sources.forEach((s) => {
-    sourceEdgeIndex.push(edges.length)
-    edges.push({ from: SUPER_SOURCE, to: index.get(s.node)!, capacity: s.capacity })
+    edges.push({
+      kind: 'source',
+      id: s.node,
+      from: SUPER_SOURCE,
+      to: index.get(s.node)!,
+      capacity: s.capacity,
+    })
+    rawEdges.push({ from: SUPER_SOURCE, to: index.get(s.node)!, capacity: s.capacity })
   })
   const sinkEdgeIndex: number[] = []
   network.sinks.forEach((k) => {
     sinkEdgeIndex.push(edges.length)
-    edges.push({ from: index.get(k.node)!, to: SUPER_SINK, capacity: k.capacity })
+    edges.push({
+      kind: 'sink',
+      id: k.node,
+      from: index.get(k.node)!,
+      to: SUPER_SINK,
+      capacity: k.capacity,
+    })
+    rawEdges.push({ from: index.get(k.node)!, to: SUPER_SINK, capacity: k.capacity })
   })
 
-  const { value, reachable } = maxFlow(n + 2, edges, SUPER_SOURCE, SUPER_SINK)
+  const result: MaxFlowResult = maxFlow(n + 2, rawEdges, SUPER_SOURCE, SUPER_SINK)
+  const { value, flow, residual, reachable } = result
 
   // 割项 = 从源侧可达集指向汇侧不可达集的建模边（残量必为 0）。
   const cut: CutItem[] = []
@@ -90,7 +145,26 @@ export function analyze(network: Network, disabled: ReadonlySet<string>): Analys
   cut.sort(compareCutItems)
 
   const disabledSorted = Array.from(disabled).sort(compareUtf16)
-  return { value, cut, disabled: disabledSorted }
+  return {
+    analysis: { value, cut, disabled: disabledSorted },
+    edges,
+    nodeCount: n + 2,
+    superSource: SUPER_SOURCE,
+    superSink: SUPER_SINK,
+    flow,
+    residual,
+    sinkEdgeIndex,
+  }
+}
+
+/**
+ * 对给定断管方案做一次完整核算，仅返回 Analysis（输入输出向后兼容）。
+ */
+export function analyze(
+  network: Network,
+  disabled: ReadonlySet<string>,
+): Analysis {
+  return solvePlan(network, disabled).analysis
 }
 
 /** 相对损失 = (基线 - 当前) / 基线；基线为 0 时约定为 0（此时当前必为 0）。 */

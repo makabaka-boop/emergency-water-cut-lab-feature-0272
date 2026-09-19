@@ -19,6 +19,12 @@ export interface MaxFlowResult {
   value: number
   /** 每条输入边（按传入顺序）的流量。 */
   flow: Float64Array
+  /**
+   * 每条输入边（按传入顺序）的正向残量容量 = capacity - flow。
+   * 反向残量容量即 flow 本身：分析层按输入边身份取
+   * 「正向 residual / 反向 flow」一对残量弧构建辅助网络。
+   */
+  residual: Float64Array
   /** 残量网络中从源可达的节点标记（含超级源/汇）。 */
   reachable: boolean[]
 }
@@ -128,10 +134,13 @@ export function maxFlow(
     value += blockingFlow()
   }
 
-  // 每条输入边的流量 = 其反向弧的残量（反向弧从 0 开始，随流量增加）。
+  // 每条输入边的流量 = 其反向弧的残量（反向弧从 0 开始，随流量增加）；
+  // 正向残量 = 初始容量 - 流量。两条残量弧都按输入边身份对外提供。
   const flow = new Float64Array(m)
+  const residual = new Float64Array(m)
   for (let i = 0; i < m; i++) {
     flow[i] = cap[2 * i + 1]
+    residual[i] = cap[2 * i]
   }
 
   // 在最终残量网络上从源做一次可达性遍历，得到最小割的源侧集合。
@@ -150,5 +159,5 @@ export function maxFlow(
     }
   }
 
-  return { value, flow, reachable }
+  return { value, flow, residual, reachable }
 }

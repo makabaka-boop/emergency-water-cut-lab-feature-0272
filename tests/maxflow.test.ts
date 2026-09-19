@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { analyze } from '../src/core/analyze'
 import { Network } from '../src/core/types'
 import { validateNetwork } from '../src/core/validate'
-import { mulberry32 } from './helpers'
+import { buildLargeNetwork } from './helpers'
 
 describe('典型结构', () => {
   it('多源多汇', () => {
@@ -166,57 +166,7 @@ describe('安全整数上界', () => {
 
 describe('性能', () => {
   it('10000 节点 / 50000 管段（含反向边与重边）四秒内完成', () => {
-    const rng = mulberry32(42)
-    const LAYERS = 100
-    const PER = 100
-    const nodes: { id: string }[] = []
-    for (let l = 0; l < LAYERS; l++) {
-      for (let i = 0; i < PER; i++) nodes.push({ id: `L${l}N${i}` })
-    }
-    const arcs: Network['arcs'] = []
-    let counter = 0
-    const randCap = () => Math.floor(rng() * 1_000_000_000)
-    // 层间前向边：99 × 100 × 5 = 49500
-    for (let l = 0; l < LAYERS - 1; l++) {
-      for (let i = 0; i < PER; i++) {
-        for (let k = 0; k < 5; k++) {
-          const j = Math.floor(rng() * PER)
-          arcs.push({
-            id: `a${counter++}`,
-            from: `L${l}N${i}`,
-            to: `L${l + 1}N${j}`,
-            capacity: randCap(),
-          })
-        }
-      }
-    }
-    // 补足 50000：250 条反向边 + 250 条重边
-    for (let i = 0; i < 250; i++) {
-      const l = Math.floor(rng() * (LAYERS - 1))
-      arcs.push({
-        id: `a${counter++}`,
-        from: `L${l + 1}N${Math.floor(rng() * PER)}`,
-        to: `L${l}N${Math.floor(rng() * PER)}`,
-        capacity: randCap(),
-      })
-    }
-    for (let i = 0; i < 250; i++) {
-      const l = Math.floor(rng() * (LAYERS - 1))
-      const u = Math.floor(rng() * PER)
-      arcs.push({
-        id: `a${counter++}`,
-        from: `L${l}N${u}`,
-        to: `L${l + 1}N${u}`,
-        capacity: randCap(),
-      })
-    }
-    const sources: Network['sources'] = []
-    const sinks: Network['sinks'] = []
-    for (let i = 0; i < PER; i++) {
-      sources.push({ node: `L0N${i}`, capacity: 1_000_000_000 })
-      sinks.push({ node: `L${LAYERS - 1}N${i}`, capacity: 1_000_000_000 })
-    }
-    const net: Network = { nodes, arcs, sources, sinks }
+    const net = buildLargeNetwork()
     expect(net.nodes).toHaveLength(10_000)
     expect(net.arcs).toHaveLength(50_000)
 

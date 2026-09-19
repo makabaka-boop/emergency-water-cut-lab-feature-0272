@@ -57,6 +57,63 @@ export function randomDisabled(net: Network, rng: () => number): Set<string> {
 }
 
 /**
+ * 10000 节点 / 50000 管段的层状网络（与 maxflow.test.ts 同一确定性构造，
+ * 抽到 helpers 以便性能用例复用）：99×100×5 条层间前向边 + 250 条反向边
+ * + 250 条重边，首末层各 100 个供水/需求点。
+ */
+export function buildLargeNetwork(): Network {
+  const rng = mulberry32(42)
+  const LAYERS = 100
+  const PER = 100
+  const nodes: { id: string }[] = []
+  for (let l = 0; l < LAYERS; l++) {
+    for (let i = 0; i < PER; i++) nodes.push({ id: `L${l}N${i}` })
+  }
+  const arcs: Network['arcs'] = []
+  let counter = 0
+  const randCap = () => Math.floor(rng() * 1_000_000_000)
+  for (let l = 0; l < LAYERS - 1; l++) {
+    for (let i = 0; i < PER; i++) {
+      for (let k = 0; k < 5; k++) {
+        const j = Math.floor(rng() * PER)
+        arcs.push({
+          id: `a${counter++}`,
+          from: `L${l}N${i}`,
+          to: `L${l + 1}N${j}`,
+          capacity: randCap(),
+        })
+      }
+    }
+  }
+  for (let i = 0; i < 250; i++) {
+    const l = Math.floor(rng() * (LAYERS - 1))
+    arcs.push({
+      id: `a${counter++}`,
+      from: `L${l + 1}N${Math.floor(rng() * PER)}`,
+      to: `L${l}N${Math.floor(rng() * PER)}`,
+      capacity: randCap(),
+    })
+  }
+  for (let i = 0; i < 250; i++) {
+    const l = Math.floor(rng() * (LAYERS - 1))
+    const u = Math.floor(rng() * PER)
+    arcs.push({
+      id: `a${counter++}`,
+      from: `L${l}N${u}`,
+      to: `L${l + 1}N${u}`,
+      capacity: randCap(),
+    })
+  }
+  const sources: Network['sources'] = []
+  const sinks: Network['sinks'] = []
+  for (let i = 0; i < PER; i++) {
+    sources.push({ node: `L0N${i}`, capacity: 1_000_000_000 })
+    sinks.push({ node: `L${LAYERS - 1}N${i}`, capacity: 1_000_000_000 })
+  }
+  return { nodes, arcs, sources, sinks }
+}
+
+/**
  * 穷举所有源侧/汇侧二分，直接求最小割容量（与任何最大流实现无关）。
  * 仅适用于节点数 ≤ 12 的小图。
  */

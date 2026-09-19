@@ -1,9 +1,10 @@
 import { ChangeEvent, useMemo, useState } from 'react'
-import { analyze, relativeLoss } from './core/analyze'
+import { relativeLoss, solvePlan, PlanSolution } from './core/analyze'
 import { formatInt, formatPercent } from './core/format'
+import { sinkIntervalByNode } from './core/interval'
 import { initialLoaderState, reduceLoad } from './core/loader'
 import { SAMPLE_TEXT } from './core/sample'
-import { Analysis, CutItem, CutKind, Model } from './core/types'
+import { Analysis, CutItem, CutKind, Model, SinkInterval } from './core/types'
 
 const KIND_LABEL: Record<CutKind, string> = {
   source: '供水点',
@@ -112,12 +113,74 @@ function ValueBlock({
   )
 }
 
+/**
+ * 避难点供水区间面板：工程师从当前模型的需求点中选择一个，
+ * 显示保持当前最大供水总量不变时，该点可获水量的最小值、
+ * 当前 Dinic 方案值、最大值。当前值仅为一组可行分配。
+ *
+ * 辅助求解失败（含所选需求点在当前模型中不存在）时就地提示，
+ * 不影响已成功的核算/演练结果。
+ */
+function SinkIntervalPanel({
+  sinks,
+  selected,
+  onSelect,
+  interval,
+  failed,
+}: {
+  sinks: Model['network']['sinks']
+  selected: string
+  onSelect: (id: string) => void
+  interval: SinkInterval | null
+  failed: string | null
+}) {
+  return (
+    <div className="interval-box">
+      <div className="interval-toolbar">
+        <label>选择避难点（需求点）</label>
+        <select
+          value={selected}
+          onChange={(e) => onSelect(e.target.value)}
+        >
+          {sinks.map((k) => (
+            <option key={k.node} value={k.node}>
+              {k.node}（需求能力 {formatInt(k.capacity)}）
+            </option>
+          ))}
+        </select>
+      </div>
+      {failed && (
+        <p className="interval-error" role="alert">
+          供水区间求解失败：{failed}。已清除旧区间，核算与演练结果不受影响。
+        </p>
+      )}
+      {!failed && interval && (
+        <>
+          <div className="value-row">
+            <ValueBlock label="最小可获水量" value={formatInt(interval.min)} />
+            <ValueBlock label="当前 Dinic 方案" value={formatInt(interval.current)} />
+            <ValueBlock label="最大可获水量" value={formatInt(interval.max)} />
+          </div>
+          <p className="muted interval-note">
+            区间在最大供水总量保持 {formatInt(interval.total)} 不变的前提下成立，
+            端点均不突破容量与节点守恒；当前 Dinic 方案值{' '}
+            {formatInt(interval.current)} 只是总值 {formatInt(interval.total)}{' '}
+            下的一组可行分配，并非唯一答案。
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function App() {
   const [loader, setLoader] = useState(initialLoaderState)
   const [text, setText] = useState('')
   const [disabled, setDisabled] = useState<ReadonlySet<string>>(new Set())
   const [filter, setFilter] = useState('')
   const [page, setPage] = useState(0)
+  // 工程师当前选中的需求点节点 id（基线与演练共用一个选择）。
+  const [selectedSink, setSelectedSink] = useState('')
 
   const model = loader.model
 
@@ -125,13 +188,15 @@ export default function App() {
     setLoader((prev) => reduceLoad(prev, t))
   }
 
-  // 模型更换（引用变化）时清空演练方案，从基线重新开始。
+  // 模型更换（引用变化）时清空演练方案与已选需求点，从基线重新开始。
+  // 载入新模型使旧选择失效：区间随之清除（由下方 useMemo 重算）。
   const [prevModel, setPrevModel] = useState(model)
   if (model !== prevModel) {
     setPrevModel(model)
     setDisabled(new Set())
     setFilter('')
     setPage(0)
+    setSelectedSink('')
   }
 
   const onFileChange = (e: ChangeEvent<HTMLInputElement>) => {
@@ -141,13 +206,76 @@ export default function App() {
     e.target.value = ''
   }
 
-  // 空方案直接复用基线结果，保证「清空方案」逐项精确回到基线。
-  const analysis: Analysis | null = useMemo(() => {
+  // 基线方案解（含建模边身份与正反残量），供区间分析复用。
+  const baselineSolution: PlanSolution | null = useMemo(() => {
+    if (!model) return null
+    return solvePlan(model.network, new Set())
+  }, [model])
+
+  // 空方案直接复用基线解，保证「清空方案」逐项精确回到基线（引用相同）。
+  const currentSolution: PlanSolution | null = useMemo(() => {
     if (!model) return null
     return disabled.size === 0
-      ? model.baseline
-      : analyze(model.network, disabled)
-  }, [model, disabled])
+      ? baselineSolution
+      : solvePlan(model.network, disabled)
+  }, [model, disabled, baselineSolution])
+
+  // 空方案直接复用基线结果，保证「清空方案」逐项精确回到基线。
+  const analysis: Analysis | null = currentSolution
+    ? currentSolution.analysis
+    : null
+
+  // 已选需求点在新模型中不存在（如载入新模型后）→ 选择落回第一个需求点；
+  // 无需求点时留空（面板不渲染）。
+  const effectiveSink =
+    model && model.network.sinks.some((k) => k.node === selectedSink)
+      ? selectedSink
+      : model && model.network.sinks.length > 0
+        ? model.network.sinks[0].node
+        : ''
+
+  // 区间求解就地容错：辅助求解失败时清除旧区间并提示，
+  // 不抛错、不影响已成功的基线核算与演练结果。
+  const computeInterval = (
+    solution: PlanSolution | null,
+    nodeId: string,
+  ): { interval: SinkInterval | null; failed: string | null } => {
+    if (!solution || !nodeId) return { interval: null, failed: null }
+    try {
+      const result = sinkIntervalByNode(solution, nodeId)
+      if (result.ok) {
+        const interval: SinkInterval = {
+          sinkNode: result.sinkNode,
+          current: result.current,
+          min: result.min,
+          max: result.max,
+          total: result.total,
+        }
+        return { interval, failed: null }
+      }
+      return { interval: null, failed: result.reason }
+    } catch (err) {
+      return {
+        interval: null,
+        failed: err instanceof Error ? err.message : String(err),
+      }
+    }
+  }
+
+  const baselineIntervalState = useMemo(
+    () => computeInterval(baselineSolution, effectiveSink),
+    [baselineSolution, effectiveSink],
+  )
+
+  // 停用/恢复管段后，已选需求点按新断管集合与当前总量重算；
+  // 清空方案时 currentSolution === baselineSolution，区间恢复为基线区间。
+  const currentIntervalState = useMemo(
+    () =>
+      disabled.size === 0
+        ? baselineIntervalState
+        : computeInterval(currentSolution, effectiveSink),
+    [currentSolution, effectiveSink, disabled.size, baselineIntervalState],
+  )
 
   const filteredArcs = useMemo(() => {
     if (!model) return []
@@ -253,6 +381,19 @@ export default function App() {
             </div>
             <h3>残量网络源侧 → 汇侧割项</h3>
             <CutTable cut={model.baseline.cut} />
+
+            {model.network.sinks.length > 0 && (
+              <>
+                <h3>避难点供水区间（基线）</h3>
+                <SinkIntervalPanel
+                  sinks={model.network.sinks}
+                  selected={effectiveSink}
+                  onSelect={setSelectedSink}
+                  interval={baselineIntervalState.interval}
+                  failed={baselineIntervalState.failed}
+                />
+              </>
+            )}
           </section>
 
           <section className="card">
@@ -305,6 +446,22 @@ export default function App() {
                   </button>
                 ))}
               </div>
+            )}
+
+            {model.network.sinks.length > 0 && (
+              <>
+                <h3>避难点供水区间（当前方案）</h3>
+                <SinkIntervalPanel
+                  sinks={model.network.sinks}
+                  selected={effectiveSink}
+                  onSelect={setSelectedSink}
+                  interval={currentIntervalState.interval}
+                  failed={currentIntervalState.failed}
+                />
+                {disabled.size === 0 && (
+                  <p className="muted">空方案下区间与基线区间一致。</p>
+                )}
+              </>
             )}
 
             <h3>当前割项</h3>
